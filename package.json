@@ -1,0 +1,23 @@
+
+{
+  "name": "leadflow-backend",
+  "version": "1.0.0",
+  "description": "LeadFlow WhatsApp webhook backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "leadflow",
+    "whatsapp",
+    "webhook"
+  ],
+  "author": "SarveshCodes",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0"
+  }
+}
