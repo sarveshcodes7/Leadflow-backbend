@@ -6,15 +6,15 @@ const express = require("express");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Parse JSON requests from Meta
-app.use(express.json());
+app.use(express.json({ limit: "20kb" }));
 
-// Basic health check
+// Health check
 app.get("/", (req, res) => {
   res.json({
     app: "LeadFlow Backend",
     status: "running",
-    webhook: "/webhook"
+    webhook: "/webhook",
+    sendEndpoint: "/api/send-template"
   });
 });
 
@@ -26,7 +26,7 @@ app.get("/webhook", (req, res) => {
 
   if (
     mode === "subscribe" &&
-    token &&
+    process.env.WEBHOOK_VERIFY_TOKEN &&
     token === process.env.WEBHOOK_VERIFY_TOKEN
   ) {
     console.log("WhatsApp webhook verified.");
@@ -36,15 +36,14 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-// Receive WhatsApp webhook events
+// Receive incoming WhatsApp webhook events
 app.post("/webhook", (req, res) => {
-  // Acknowledge quickly so Meta does not keep retrying.
+  // Acknowledge promptly
   res.sendStatus(200);
 
   const body = req.body;
 
-  if (body.object !== "whatsapp_business_account") {
-    console.log("Received a non-WhatsApp event.");
+  if (body?.object !== "whatsapp_business_account") {
     return;
   }
 
@@ -68,6 +67,110 @@ app.post("/webhook", (req, res) => {
         });
       }
     }
+  }
+});
+
+// Send an approved WhatsApp template
+app.post("/api/send-template", async (req, res) => {
+  try {
+    const { phone, name } = req.body || {};
+
+    // Phone number must include country code, without + or spaces.
+    if (typeof phone !== "string" ||
+        !/^[1-9]\d{7,14}$/.test(phone)) {
+      return res.status(400).json({
+        error: "Enter a valid phone number with country code, without +."
+      });
+    }
+
+    const {
+      WHATSAPP_ACCESS_TOKEN,
+      WHATSAPP_PHONE_NUMBER_ID,
+      WHATSAPP_TEMPLATE_NAME,
+      WHATSAPP_TEMPLATE_LANGUAGE,
+      GRAPH_API_VERSION
+    } = process.env;
+
+    if (
+      !WHATSAPP_ACCESS_TOKEN ||
+      !WHATSAPP_PHONE_NUMBER_ID ||
+      !WHATSAPP_TEMPLATE_NAME ||
+      !WHATSAPP_TEMPLATE_LANGUAGE ||
+      !GRAPH_API_VERSION
+    ) {
+      return res.status(500).json({
+        error: "WhatsApp configuration is incomplete in Render."
+      });
+    }
+
+    const recipientName =
+      typeof name === "string" && name.trim()
+        ? name.trim().slice(0, 100)
+        : "there";
+
+    const apiUrl =
+      `https://graph.facebook.com/${GRAPH_API_VERSION}/` +
+      `${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: phone,
+        type: "template",
+        template: {
+          name: WHATSAPP_TEMPLATE_NAME,
+          language: {
+            code: WHATSAPP_TEMPLATE_LANGUAGE
+          },
+          components: [
+            {
+              type: "body",
+              parameters: [
+                {
+                  type: "text",
+                  text: recipientName
+                }
+              ]
+            }
+          ]
+        }
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      console.error("WhatsApp API rejected the request:", {
+        status: response.status,
+        error: result.error?.message,
+        code: result.error?.code
+      });
+
+      return res.status(502).json({
+        error: "Meta rejected the message request.",
+        metaError: result.error?.message || "Unknown Meta API error",
+        metaCode: result.error?.code || null
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Meta accepted the message request.",
+      messageId: result.messages?.[0]?.id || null
+    });
+  } catch (error) {
+    console.error("WhatsApp request failed:", error.message);
+
+    return res.status(500).json({
+      error: "The message request could not be completed."
+    });
   }
 });
 
